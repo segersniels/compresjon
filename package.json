@@ -1,0 +1,42 @@
+{
+  "name": "compresjon",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs --minify --dts-resolve",
+    "lint": "eslint '**/*.{ts,tsx}'",
+    "lint:fix": "eslint '**/*.{ts,tsx}' --fix",
+    "check:typescript": "tsc --noEmit --skipLibCheck --project .",
+    "test": "mocha --require ts-node/register --require tsconfig-paths/register ./**/*.spec.ts",
+    "example:compresjon": "ts-node -r tsconfig-paths/register ./example/compresjon.ts",
+    "example:native": "ts-node -r tsconfig-paths/register ./example/native.ts",
+    "benchmark:compresjon": "ts-node -r tsconfig-paths/register ./example/benchmark.ts 1000 3000",
+    "benchmark:native": "ts-node -r tsconfig-paths/register ./example/benchmark.ts 1000 3001"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/chai": "^4.3.5",
+    "@types/express": "^4.17.17",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "^20.2.1",
+    "@typescript-eslint/eslint-plugin": "^5.59.6",
+    "@typescript-eslint/parser": "^5.59.6",
+    "chai": "^4.3.7",
+    "eslint": "^8.40.0",
+    "eslint-config-prettier": "^8.8.0",
+    "eslint-plugin-no-async-without-await": "^1.2.0",
+    "eslint-plugin-prettier": "^4.2.1",
+    "express": "^4.18.2",
+    "mocha": "^10.2.0",
+    "prettier": "^2.8.8",
+    "ts-node": "^10.9.1",
+    "tsconfig-paths": "^4.2.0",
+    "tsup": "^6.7.0",
+    "typescript": "^5.0.4"
+  }
+}
