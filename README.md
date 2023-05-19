@@ -47,6 +47,16 @@ const json = new CompreSJON({ hello: 'world' });
 console.log(CompreSJON.parse(json)); // { hello: 'world' }
 ```
 
+Keep in mind that when using `parse` that there will be two instances of the JSON data in memory during the runtime. Both the internal binary representation and the parsed JSON. So depending on your use case you can look into `dump`:
+
+```ts
+const json = new CompreSJON({ hello: 'world' });
+console.log(CompreSJON.dump(json)); // { hello: 'world' }
+console.log(json.buffer.length); // 0
+```
+
+Dumping the data will return the parsed JSON while also clearing the internal binary reference. This means that the only instance available, during the runtime after `dump`, is the parsed JSON. Just don't forget to `update` with the updated data once it's ready to be compressed again.
+
 ### Pros and Cons
 
 It's important to note that `compresjon` is optimized for storing large amounts of data that are infrequently accessed. It may not be suitable for scenarios that require frequent read or write operations on the data due to the serialization overhead that it introduces.
