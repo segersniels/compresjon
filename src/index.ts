@@ -56,15 +56,10 @@ export default class CompreSJON<T extends Input> {
   /**
    * Replaces the existing data within the buffer with the new data.
    *
-   * _Note that this is an asynchronous operation, so if you need to use the
-   * updated data immediately, you should `await` the `Promise`.
-   * If you don't care about the updated data (eg. caching for the long run),
-   * you can ignore the `Promise`._
-   *
    * ```ts
    * const json = new CompreSJON({ hello: 'world' });
-   * await json.update({ hello: 'universe' });
-   * console.log(await json.get('hello')); // 'universe'
+   * json.update({ hello: 'universe' });
+   * console.log(CompreSJON.parse(json)); // { hello: 'universe' }
    * ```
    */
   public update(input: T extends Array<infer U> ? Array<U> : JsonValue) {
