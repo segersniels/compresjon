@@ -1,4 +1,4 @@
-# compresjon
+# CompreSJON
 
 [![npm](https://img.shields.io/npm/v/compresjon)](https://www.npmjs.com/package/compresjon)
 
