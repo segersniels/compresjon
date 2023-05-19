@@ -35,6 +35,17 @@ describe('CompreSJON', () => {
         });
       });
     });
+
+    describe('dump', () => {
+      it('should dump the data', () => {
+        const parsed = CompreSJON.dump(json);
+
+        expect(json.buffer).to.have.length(0);
+        expect(parsed).to.deep.equal({
+          hello: 'world',
+        });
+      });
+    });
   });
 
   describe('array', () => {
@@ -66,6 +77,15 @@ describe('CompreSJON', () => {
         const parsed = CompreSJON.parse(json);
 
         expect(parsed).to.deep.equal(['hello', 'you']);
+      });
+    });
+
+    describe('dump', () => {
+      it('should dump the data', () => {
+        const parsed = CompreSJON.dump(json);
+
+        expect(json.buffer).to.have.length(0);
+        expect(parsed).to.deep.equal(['hello', 'world']);
       });
     });
   });
