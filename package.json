@@ -6,6 +6,24 @@
   "files": [
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/segersniels/compresjon.git"
+  },
+  "keywords": [
+    "json",
+    "compression",
+    "brotli",
+    "compressed",
+    "binary",
+    "optimized"
+  ],
+  "bugs": {
+    "url": "https://github.com/segersniels/compresjon/issues"
+  },
+  "homepage": "https://github.com/segersniels/compresjon#readme",
+  "author": "Niels Segers",
+  "license": "ISC",
   "scripts": {
     "build": "tsup src/index.ts --format cjs --minify --dts-resolve",
     "lint": "eslint '**/*.{ts,tsx}'",
@@ -17,8 +35,6 @@
     "benchmark:compresjon": "ts-node -r tsconfig-paths/register ./example/benchmark.ts 1000 3000",
     "benchmark:native": "ts-node -r tsconfig-paths/register ./example/benchmark.ts 1000 3001"
   },
-  "author": "",
-  "license": "ISC",
   "devDependencies": {
     "@types/chai": "^4.3.5",
     "@types/express": "^4.17.17",
