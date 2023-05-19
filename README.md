@@ -4,6 +4,9 @@
 
 `compresjon` is a lightweight npm package designed for storing large amounts of data in a compressed and serialized format. It is particularly useful for long-running processes that require infrequent access to data, such as cold storage during interval downtimes.
 
+<p align="center">
+<img src="./resources/logo.png" width="300">
+
 ## Installation
 
 ```
