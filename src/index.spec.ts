@@ -19,16 +19,16 @@ describe('CompreSJON', () => {
 
     describe('parse', () => {
       it('should parse the data', () => {
-        const parsed = CompreSJON.parseSync(json);
+        const parsed = CompreSJON.parse(json);
 
         expect(parsed).to.deep.equal({ hello: 'world' });
       });
     });
 
     describe('update', () => {
-      it('should update the data', async () => {
-        await json.update({ hello: 'you' });
-        const parsed = CompreSJON.parseSync(json);
+      it('should update the data', () => {
+        json.update({ hello: 'you' });
+        const parsed = CompreSJON.parse(json);
 
         expect(parsed).to.deep.equal({
           hello: 'you',
@@ -54,16 +54,16 @@ describe('CompreSJON', () => {
 
     describe('parse', () => {
       it('should parse the data', () => {
-        const parsed = CompreSJON.parseSync(json);
+        const parsed = CompreSJON.parse(json);
 
         expect(parsed).to.deep.equal(['hello', 'world']);
       });
     });
 
     describe('update', () => {
-      it('should update the data', async () => {
-        await json.update(['hello', 'you']);
-        const parsed = CompreSJON.parseSync(json);
+      it('should update the data', () => {
+        json.update(['hello', 'you']);
+        const parsed = CompreSJON.parse(json);
 
         expect(parsed).to.deep.equal(['hello', 'you']);
       });
