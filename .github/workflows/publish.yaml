@@ -4,14 +4,13 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
         with:
           node-version: "18"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          registry-url: "https://registry.npmjs.org"
       - name: Cache NPM
         uses: actions/cache@v3
         with:
@@ -22,3 +21,5 @@ jobs:
       - run: npm install
       - run: npm run build
       - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
