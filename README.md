@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/compresjon)](https://www.npmjs.com/package/compresjon)
 
-`compresjon` is a lightweight npm package designed for storing large amounts of data in a compressed and serialized format. It is particularly useful for long-running processes that require infrequent access to data, such as cold storage during interval downtimes.
+`compresjon` is a lightweight package designed for storing JSON data in a compressed and serialized format. It is particularly useful for long-running processes that require infrequent access to data, such as cold storage during interval downtimes.
 
 <p align="center">
 <img src="./resources/logo.png" width="300">
