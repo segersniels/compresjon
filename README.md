@@ -14,6 +14,8 @@ npm install compresjon
 ```
 
 ## Usage
+  
+Converts a JavaScript Object Notation (JSON) into its compressed counterpart.
 
 ```ts
 import CompreSJON from 'compresjon';
@@ -22,8 +24,8 @@ const json = new CompreSJON({ hello: 'world' });
 ```
 
 ### Updating Data
-
-Converts a JavaScript Object Notation (JSON) string into a CompreSJON.
+  
+Override the internal compressed data with a new updated dataset.
 
 ```ts
 const json = new CompreSJON({ hello: 'world' });
