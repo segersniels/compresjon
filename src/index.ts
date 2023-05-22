@@ -3,16 +3,11 @@ import type Input from 'types/Input';
 import JsonValue from 'types/JsonValue';
 import zlib from 'zlib';
 import { encode, decode } from '@msgpack/msgpack';
+import CompressionLevel from 'enums/CompressionLevel';
 
-/**
- * The compression level to use when compressing the JSON.
- *
- * @see https://nodejs.org/api/zlib.html#zlib_class_brotlioptions
- */
-const DEFAULT_BROTLI_OPTIONS = {
-  [zlib.constants.BROTLI_PARAM_MODE]: zlib.constants.BROTLI_MODE_TEXT,
-  [zlib.constants.BROTLI_PARAM_QUALITY]: 5,
-};
+interface Options {
+  compressionLevel?: CompressionLevel | number;
+}
 
 /**
  * An optimized JSON object that has been serialized and compressed.
@@ -25,17 +20,24 @@ const DEFAULT_BROTLI_OPTIONS = {
  */
 export default class CompreSJON<T extends Input> {
   public buffer: Buffer;
+  private readonly compressionLevel: CompressionLevel;
 
-  constructor(input: T) {
+  constructor(input: T, options?: Options) {
     this.buffer = this._serialize(input);
+    this.compressionLevel =
+      options?.compressionLevel ?? CompressionLevel.Default;
   }
 
   private _serialize(input: Input): Buffer {
     const buffer = encode(input);
 
+    /**
+     * @see https://nodejs.org/api/zlib.html#zlib_class_brotlioptions
+     */
     return zlib.brotliCompressSync(buffer, {
       params: {
-        ...DEFAULT_BROTLI_OPTIONS,
+        [zlib.constants.BROTLI_PARAM_MODE]: zlib.constants.BROTLI_MODE_TEXT,
+        [zlib.constants.BROTLI_PARAM_QUALITY]: this.compressionLevel,
         [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buffer.length,
       },
     });
