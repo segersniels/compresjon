@@ -8,6 +8,9 @@ import CompressionLevel from 'enums/CompressionLevel';
 export { default as CompressionLevel } from 'enums/CompressionLevel';
 
 interface Options {
+  /**
+   * The compression level to use when compressing the JSON. Default is `CompressionLevel.Default`.
+   */
   compressionLevel?: CompressionLevel | number;
 }
 
