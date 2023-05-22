@@ -2,6 +2,7 @@ import { EmptyBufferError } from 'helpers/Error';
 import type Input from 'types/Input';
 import JsonValue from 'types/JsonValue';
 import zlib from 'zlib';
+import { encode, decode } from '@msgpack/msgpack';
 
 /**
  * The compression level to use when compressing the JSON.
@@ -30,7 +31,7 @@ export default class CompreSJON<T extends Input> {
   }
 
   private _serialize(input: Input): Buffer {
-    const buffer = Buffer.from(JSON.stringify(input));
+    const buffer = encode(input);
 
     return zlib.brotliCompressSync(buffer, {
       params: {
@@ -41,16 +42,16 @@ export default class CompreSJON<T extends Input> {
   }
 
   private _deserialize(): T {
-    const decompressed = zlib.brotliDecompressSync(this.buffer);
+    const data = zlib.brotliDecompressSync(this.buffer);
 
-    return JSON.parse(decompressed.toString());
+    return decode(data) as T;
   }
 
   private _destructiveDeserialize(): T {
     const data = zlib.brotliDecompressSync(this.buffer);
     this.buffer = Buffer.alloc(0);
 
-    return JSON.parse(data.toString());
+    return decode(data) as T;
   }
 
   /**
