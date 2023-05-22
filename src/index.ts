@@ -1,7 +1,7 @@
 import { EmptyBufferError } from 'helpers/Error';
 import type Input from 'types/Input';
 import JsonValue from 'types/JsonValue';
-import zlib from 'zlib';
+import { brotliCompressSync, brotliDecompressSync, constants } from 'zlib';
 import { encode, decode } from '@msgpack/msgpack';
 import CompressionLevel from 'enums/CompressionLevel';
 
@@ -35,25 +35,25 @@ export default class CompreSJON<T extends Input> {
     const buffer = encode(input);
 
     /**
-     * @see https://nodejs.org/api/zlib.html#zlib_class_brotlioptions
+     * @see https://nodejs.org/api/html#zlib_class_brotlioptions
      */
-    return zlib.brotliCompressSync(buffer, {
+    return brotliCompressSync(buffer, {
       params: {
-        [zlib.constants.BROTLI_PARAM_MODE]: zlib.constants.BROTLI_MODE_TEXT,
-        [zlib.constants.BROTLI_PARAM_QUALITY]: this.compressionLevel,
-        [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buffer.length,
+        [constants.BROTLI_PARAM_MODE]: constants.BROTLI_MODE_TEXT,
+        [constants.BROTLI_PARAM_QUALITY]: this.compressionLevel,
+        [constants.BROTLI_PARAM_SIZE_HINT]: buffer.length,
       },
     });
   }
 
   private _deserialize(): T {
-    const data = zlib.brotliDecompressSync(this.buffer);
+    const data = brotliDecompressSync(this.buffer);
 
     return decode(data) as T;
   }
 
   private _destructiveDeserialize(): T {
-    const data = zlib.brotliDecompressSync(this.buffer);
+    const data = brotliDecompressSync(this.buffer);
     this.buffer = Buffer.alloc(0);
 
     return decode(data) as T;
