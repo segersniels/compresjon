@@ -5,6 +5,8 @@ import { brotliCompressSync, brotliDecompressSync, constants } from 'zlib';
 import { encode, decode } from '@msgpack/msgpack';
 import CompressionLevel from 'enums/CompressionLevel';
 
+export { default as CompressionLevel } from 'enums/CompressionLevel';
+
 interface Options {
   compressionLevel?: CompressionLevel | number;
 }
