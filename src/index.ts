@@ -20,12 +20,15 @@ interface Options {
  */
 export default class CompreSJON<T extends Input> {
   public buffer: Buffer;
-  private readonly compressionLevel: CompressionLevel;
+  private readonly compressionLevel: CompressionLevel | number =
+    CompressionLevel.Default;
 
   constructor(input: T, options?: Options) {
     this.buffer = this._serialize(input);
-    this.compressionLevel =
-      options?.compressionLevel ?? CompressionLevel.Default;
+
+    if (options?.compressionLevel) {
+      this.compressionLevel = options.compressionLevel;
+    }
   }
 
   private _serialize(input: Input): Buffer {
