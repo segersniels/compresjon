@@ -1,7 +1,7 @@
 enum CompressionLevel {
-  Minimum = 1,
+  Lowest = 1,
   Default = 5,
-  Maximum = 11,
+  Highest = 11,
 }
 
 export default CompressionLevel;
