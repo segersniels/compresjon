@@ -29,11 +29,7 @@
     "lint": "eslint '**/*.{ts,tsx}'",
     "lint:fix": "eslint '**/*.{ts,tsx}' --fix",
     "check:typescript": "tsc --noEmit --skipLibCheck --project .",
-    "test": "mocha --require ts-node/register --require tsconfig-paths/register ./**/*.spec.ts",
-    "example:compresjon": "ts-node -r tsconfig-paths/register ./example/compresjon.ts",
-    "example:native": "ts-node -r tsconfig-paths/register ./example/native.ts",
-    "benchmark:compresjon": "ts-node -r tsconfig-paths/register ./example/benchmark.ts 1000 3000",
-    "benchmark:native": "ts-node -r tsconfig-paths/register ./example/benchmark.ts 1000 3001"
+    "test": "mocha --require ts-node/register --require tsconfig-paths/register ./**/*.spec.ts"
   },
   "devDependencies": {
     "@types/chai": "^4.3.5",
