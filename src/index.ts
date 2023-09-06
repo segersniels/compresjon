@@ -124,6 +124,8 @@ export default class CompreSJON<T extends Input> {
    * process. This is useful if you want to avoid having two copies of the data
    * in memory.
    *
+   * __Attention: This is a destructive action and will clear the internal buffer.__
+   *
    * ```ts
    * const json = new CompreSJON({ hello: 'world' });
    * const data = CompreSJON.dump(json);
