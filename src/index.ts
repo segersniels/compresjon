@@ -82,10 +82,10 @@ export default class CompreSJON<T extends Input> {
    * the `CompreSJON` class as a response type. This method will be called
    * automatically by `JSON.stringify` when the `CompreSJON` class is passed in.
    *
-   * __Attention: This is a destructive action and will clear the internal buffer.__
+   * This returns the raw buffer of the compressed JSON.
    */
   public toJSON() {
-    return this._destructiveDeserialize();
+    return this.buffer;
   }
 
   /**
