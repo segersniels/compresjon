@@ -28,12 +28,16 @@ export default class CompreSJON<T extends Input> {
   private readonly compressionLevel: CompressionLevel | number =
     CompressionLevel.Default;
 
-  constructor(input: T, options?: Options) {
+  constructor(input: T | Buffer, options?: Options) {
     if (options?.compressionLevel) {
       this.compressionLevel = options.compressionLevel;
     }
 
-    this.buffer = this._serialize(input);
+    if (Buffer.isBuffer(input)) {
+      this.buffer = input;
+    } else {
+      this.buffer = this._serialize(input);
+    }
   }
 
   private _serialize(input: Input): Buffer {

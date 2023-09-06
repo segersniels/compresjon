@@ -9,6 +9,14 @@ describe('CompreSJON', () => {
       json = new CompreSJON({ hello: 'world' });
     });
 
+    describe('constructor', () => {
+      it('should create a new instance from a Buffer', () => {
+        const instance = new CompreSJON<Record<string, string>>(json.buffer);
+
+        expect(instance.buffer.equals(json.buffer)).to.be.true;
+      });
+    });
+
     describe('stringify', () => {
       it('should stringify the data', () => {
         const stringified = CompreSJON.stringify(json);
