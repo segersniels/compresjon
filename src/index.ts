@@ -78,6 +78,17 @@ export default class CompreSJON<T extends Input> {
   }
 
   /**
+   * @deprecated The intended use case of this method is to allow API frameworks to leverage
+   * the `CompreSJON` class as a response type. This method will be called
+   * automatically by `JSON.stringify` when the `CompreSJON` class is passed in.
+   *
+   * __Attention: This is a destructive action and will clear the internal buffer.__
+   */
+  public toJSON() {
+    return this._destructiveDeserialize();
+  }
+
+  /**
    * Converts a JavaScript Object Notation (JSON) string into a CompreSJON.
    *
    * ```ts
