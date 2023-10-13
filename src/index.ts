@@ -93,7 +93,7 @@ export default class CompreSJON<T extends Input> {
   }
 
   /**
-   * Converts a JavaScript Object Notation (JSON) string into a CompreSJON.
+   * Converts a JavaScript Object Notation (JSON) into a CompreSJON.
    *
    * ```ts
    * const json = new CompreSJON({ hello: 'world' });
@@ -107,7 +107,7 @@ export default class CompreSJON<T extends Input> {
   }
 
   /**
-   * Converts a JavaScript Object Notation (JSON) string into a CompreSJON.
+   * Converts a CompreSJON into a JavaScript Object Notation (JSON).
    *
    * ```ts
    * const json = new CompreSJON({ hello: 'world' });
