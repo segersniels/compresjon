@@ -96,5 +96,17 @@ describe('CompreSJON', () => {
         expect(parsed).to.deep.equal(['hello', 'world']);
       });
     });
+
+    describe('process', () => {
+      it('should dump the internal data while processing', () => {
+        json.process((data) => {
+          expect(json.buffer).to.have.length(0);
+          expect(data).to.deep.equal(['hello', 'world']);
+        });
+
+        const parsed = CompreSJON.parse(json);
+        expect(parsed).to.deep.equal(['hello', 'world']);
+      });
+    });
   });
 });

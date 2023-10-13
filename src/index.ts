@@ -82,6 +82,32 @@ export default class CompreSJON<T extends Input> {
   }
 
   /**
+   * Allows you to process the JavaScript Object Notation (JSON) representation of the internal
+   * buffer without having to worry about having two copies of the data in memory. This is identical
+   * to doing:
+   *
+   * ```ts
+   * const json = new CompreSJON({ hello: 'world' });
+   * const data = CompreSJON.dump(json);
+   * // Perform logic on data
+   * json.update(data);
+   * ```
+   *
+   * @param cb A callback function that will be called with the parsed data.
+   *
+   * ```ts
+   * const json = new CompreSJON({ hello: 'world' });
+   * json.process((data) => console.log(data)); // { hello: 'world' }
+   * ```
+   */
+  public process(cb: (json: T) => void) {
+    const data = this._destructiveDeserialize();
+    cb(data);
+
+    this.buffer = this._serialize(data);
+  }
+
+  /**
    * @deprecated The intended use case of this method is to allow API frameworks to leverage
    * the `CompreSJON` class as a response type. This method will be called
    * automatically by `JSON.stringify` when the `CompreSJON` class is passed in.
