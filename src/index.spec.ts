@@ -107,6 +107,16 @@ describe('CompreSJON', () => {
         const parsed = CompreSJON.parse(json);
         expect(parsed).to.deep.equal(['hello', 'world']);
       });
+
+      it('should persist mutated data', () => {
+        json.process((data) => {
+          data.push('foo');
+          expect(json.buffer).to.have.length(0);
+        });
+
+        const parsed = CompreSJON.parse(json);
+        expect(parsed).to.deep.equal(['hello', 'world', 'foo']);
+      });
     });
   });
 });
