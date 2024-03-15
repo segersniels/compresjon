@@ -123,13 +123,42 @@ export default class CompreSJON<T extends Input> {
    *
    * ```ts
    * const json = new CompreSJON({ hello: 'world' });
+   * console.log(json.stringify()); // '{"hello":"world"}'
+   * ```
+   */
+  public toString(): string {
+    const data = this._deserialize();
+
+    return JSON.stringify(data);
+  }
+
+  /**
+   * Converts a JavaScript Object Notation (JSON) into a CompreSJON.
+   *
+   * ```ts
+   * const json = new CompreSJON({ hello: 'world' });
    * console.log(CompreSJON.stringify(json)); // '{"hello":"world"}'
    * ```
    */
   public static stringify<T extends Input>(json: CompreSJON<T>): string {
-    const data = json._deserialize();
+    return json.toString();
+  }
 
-    return JSON.stringify(data);
+  /**
+   * Converts a CompreSJON into a JavaScript Object Notation (JSON).
+   *
+   * ```ts
+   * const json = new CompreSJON({ hello: 'world' });
+   * const data = json.parse();
+   * console.log(data); // { hello: 'world' }
+   * ```
+   */
+  public parse() {
+    if (this.buffer.length === 0) {
+      throw new EmptyBufferError();
+    }
+
+    return this._deserialize();
   }
 
   /**
@@ -142,11 +171,29 @@ export default class CompreSJON<T extends Input> {
    * ```
    */
   public static parse<T extends Input>(json: CompreSJON<T>) {
-    if (json.buffer.length === 0) {
+    return json.parse();
+  }
+
+  /**
+   * Similar to `CompreSJON.parse`, but empties the internal buffer in the
+   * process. This is useful if you want to avoid having two copies of the data
+   * in memory.
+   *
+   * __Attention: This is a destructive action and will clear the internal buffer.__
+   *
+   * ```ts
+   * const json = new CompreSJON({ hello: 'world' });
+   * const data = json.dump();
+   * console.log(data); // { hello: 'world' }
+   * console.log(json.buffer.length); // 0
+   * ```
+   */
+  public dump() {
+    if (this.buffer.length === 0) {
       throw new EmptyBufferError();
     }
 
-    return json._deserialize();
+    return this._destructiveDeserialize();
   }
 
   /**
@@ -164,10 +211,6 @@ export default class CompreSJON<T extends Input> {
    * ```
    */
   public static dump<T extends Input>(json: CompreSJON<T>) {
-    if (json.buffer.length === 0) {
-      throw new EmptyBufferError();
-    }
-
-    return json._destructiveDeserialize();
+    return json.dump();
   }
 }
