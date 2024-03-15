@@ -1,11 +1,9 @@
 {
   "name": "compresjon",
-  "version": "0.5.0",
-  "description": "",
+  "version": "1.0.0",
+  "description": "A lightweight package designed for storing JSON data in a compressed and serialized format.",
   "main": "dist/index.js",
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/segersniels/compresjon.git"
