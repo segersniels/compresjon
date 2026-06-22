@@ -1,5 +1,7 @@
 # CompreSJON
 
+[![npm](https://img.shields.io/npm/v/compresjon)](https://www.npmjs.com/package/compresjon)
+
 `compresjon` is a tiny utility for keeping large JSON-compatible values compressed while they are idle.
 
 It is meant for long-running Node.js workers that occasionally need a large in-memory cache, but do not need that cache inflated all the time.
