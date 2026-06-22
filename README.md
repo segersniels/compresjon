@@ -12,12 +12,22 @@ See [benchmarks](./docs/benchmarks.md) for the current size and lifecycle tradeo
 npm install compresjon
 ```
 
+CompreSJON is published as ESM and CommonJS:
+
+```ts
+import CompreSJON from "compresjon";
+```
+
+```js
+const { default: CompreSJON } = require("compresjon");
+```
+
 ## Usage
 
 ```ts
 import CompreSJON from "compresjon";
 
-let cache = buildLargeCache();
+let cache: ReturnType<typeof buildLargeCache> | undefined = buildLargeCache();
 const coldCache = new CompreSJON(cache);
 
 // Drop your own live reference when the cache is idle.
@@ -35,6 +45,8 @@ const coldCache = new CompreSJON({ hello: "world" });
 console.log(coldCache.read()); // { hello: 'world' }
 console.log(coldCache.byteLength > 0); // true
 ```
+
+CompreSJON stores JSON-serializable values. Values that JSON would drop, rewrite, or compute through accessors, such as `undefined`, functions, symbols, `BigInt`, `NaN`, `Infinity`, sparse arrays, symbol keys, non-enumerable properties, getters/setters, custom array properties, circular structures, and non-plain objects like `Map`, `Set`, or `Date`, are rejected.
 
 ## Stats
 
@@ -57,9 +69,22 @@ console.log(coldCache.stats);
 
 `jsonBytes`, `ratio`, `savingsBytes`, and `savingsPercent` are available when CompreSJON compressed the value itself or when the value was restored from a CompreSJON JSON envelope. Raw buffers do not carry that metadata.
 
+## API At A Glance
+
+- `read()` / `parse()` inflate without consuming the compressed bytes.
+- `take()` / `dump()` inflate and clear the compressed bytes before returning the value.
+- `process(callback)` inflates, lets you mutate synchronously, then recompresses.
+- `processAsync(callback)` does the same for async work.
+- `update(value)` / `updateAsync(value)` replace the compressed value.
+- `dispose()` clears the stored payload.
+- `toBuffer()` / `fromBuffer()` are for binary transport.
+- `toBase64()` / `fromBase64()` are for string transport.
+- `toEnvelope()` / `fromEnvelope()` are for JSON-safe transport with metadata.
+- `toJSON()` / `fromJSON()` are kept as the original JSON envelope names.
+
 ## Process And Recompress
 
-`process()` is the safest cache lifecycle for most workers: it destructively inflates, lets you mutate the live value, then recompresses it.
+`process()` is the safest cache lifecycle for most workers: it clears the instance while you mutate the live value, then recompresses it. The previous payload is kept as a fallback so failed recompression can restore the cache.
 
 ```ts
 const coldCache = new CompreSJON([{ id: 1, status: "idle" }]);
@@ -68,6 +93,8 @@ coldCache.process((items) => {
   items.push({ id: 2, status: "idle" });
 });
 ```
+
+`process()` only accepts synchronous callbacks. Use `processAsync()` for work that awaits.
 
 Async compression is available when you do not want Brotli work on the main event-loop turn:
 
@@ -81,7 +108,7 @@ await coldCache.processAsync(async (items) => {
 
 ## GC Control
 
-CompreSJON drops its own references early, but it cannot force V8 to collect memory unless your process exposes GC.
+CompreSJON drops its own references early, but it cannot force the runtime to collect memory unless your process exposes GC.
 
 For memory-sensitive workers, start Node with `--expose-gc` and pass `gc: true`:
 
@@ -95,6 +122,10 @@ const coldCache = new CompreSJON(largeCache, { gc: true });
 const liveCache = coldCache.take();
 ```
 
+Manual GC is opt-in because it can pause your worker. CompreSJON never calls `globalThis.gc()` just because it exists; pass `gc: true` when you want CompreSJON to call it after memory-releasing operations.
+
+If `globalThis.gc` is not available, `gc: true` is a no-op. Other runtimes can use the same option when they expose `globalThis.gc`, or pass a custom hook.
+
 You can also pass a hook for custom scheduling or metrics:
 
 ```ts
@@ -107,17 +138,25 @@ const coldCache = new CompreSJON(largeCache, {
 
 The hook runs after `take`, `update`, and `dispose`.
 
+Hook errors are ignored so metrics or cleanup code cannot break cache reads and writes.
+
 ## Transport
 
-Use `toBuffer()` for binary transport or `toJSON()` for a base64 JSON envelope.
+Use `toBuffer()` for binary transport or `toEnvelope()` for a base64 JSON envelope.
 
 ```ts
 const coldCache = new CompreSJON({ hello: "world" });
 const bytes = coldCache.toBuffer();
 const restored = CompreSJON.fromBuffer<{ hello: string }>(bytes);
+const restoredFromBase64 = CompreSJON.fromBase64<{ hello: string }>(coldCache.toBase64());
+const restoredFromEnvelope = CompreSJON.fromEnvelope<{ hello: string }>(coldCache.toEnvelope());
 ```
 
 `toBuffer()` returns a defensive copy by default. Pass `{ copy: false }` only when the caller owns the returned buffer and will not mutate it.
+
+`toJSON()` is kept for compatibility with the published API and returns the same JSON-safe envelope as `toEnvelope()`.
+
+`fromBase64()` rejects invalid base64 immediately. `fromBuffer()` expects bytes produced by this version of CompreSJON; invalid Brotli or non-JSON bytes are rejected when read.
 
 ## Compression Levels
 

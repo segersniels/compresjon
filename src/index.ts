@@ -5,7 +5,8 @@ import {
   brotliDecompressSync,
   constants,
 } from "node:zlib";
-import { promisify } from "node:util";
+import { Buffer } from "node:buffer";
+import { inspect, promisify } from "node:util";
 
 const compress = promisify(brotliCompress);
 const decompress = promisify(brotliDecompress);
@@ -37,7 +38,8 @@ export interface CompreSJONOptions {
   /**
    * Explicit GC hook for memory-sensitive workers.
    *
-   * `true` calls `globalThis.gc()` when Node was started with `--expose-gc`.
+   * `true` opts in to calling `globalThis.gc()` when the runtime exposes it.
+   * Missing `globalThis.gc()` is a no-op.
    * A function can be used for custom scheduling, metrics, or tests.
    */
   gc?: boolean | GarbageCollector;
@@ -52,12 +54,14 @@ export interface BufferOptions {
   copy?: boolean;
 }
 
-export interface CompreSJONJSON {
+export interface CompreSJONEnvelope {
   format: typeof FORMAT;
   data: string;
   compressionLevel?: number;
   jsonBytes?: number;
 }
+
+export type CompreSJONJSON = CompreSJONEnvelope;
 
 export interface CompreSJONStats {
   compressedBytes: number;
@@ -72,12 +76,35 @@ export interface CompreSJONStats {
 export class EmptyBufferError extends Error {
   constructor() {
     super("The compressed data has already been consumed. Call update() before reading it again.");
+    this.name = "EmptyBufferError";
   }
 }
 
 export class InvalidPayloadError extends Error {
   constructor() {
-    super("Expected a CompreSJON JSON payload.");
+    super("Expected a valid CompreSJON transport payload.");
+    this.name = "InvalidPayloadError";
+  }
+}
+
+export class InvalidJsonValueError extends Error {
+  constructor(cause?: unknown) {
+    super("Expected a JSON-serializable value.", { cause });
+    this.name = "InvalidJsonValueError";
+  }
+}
+
+export class InvalidCompressedDataError extends Error {
+  constructor(cause?: unknown) {
+    super("Expected Brotli-compressed JSON data.", { cause });
+    this.name = "InvalidCompressedDataError";
+  }
+}
+
+export class AsyncProcessCallbackError extends Error {
+  constructor() {
+    super("process() callbacks must be synchronous. Use processAsync() for async work.");
+    this.name = "AsyncProcessCallbackError";
   }
 }
 
@@ -85,26 +112,26 @@ export class InvalidPayloadError extends Error {
  * Cold storage for large JSON-compatible values.
  *
  * Keep application data in this compressed wrapper while it is idle, then use
- * `take()` or `process()` to avoid retaining compressed bytes while the live
- * JavaScript value is being worked on.
+ * `take()` for destructive reads or `process()` for guarded mutate-and-
+ * recompress workflows.
  */
 export default class CompreSJON<T = JsonValue> {
-  private compressed: Buffer = EMPTY_BUFFER;
-  private jsonBytes?: number;
-  private readonly compressionLevel: number;
-  private readonly garbageCollector?: GarbageCollector;
+  #compressed: Buffer = EMPTY_BUFFER;
+  #jsonBytes?: number;
+  #compressionLevel: number;
+  #garbageCollector?: GarbageCollector;
 
   constructor(input: T | Uint8Array, options: CompreSJONOptions = {}) {
-    this.compressionLevel = normalizeCompressionLevel(options.compressionLevel);
-    this.garbageCollector = resolveGarbageCollector(options.gc);
+    this.#compressionLevel = normalizeCompressionLevel(options.compressionLevel);
+    this.#garbageCollector = resolveGarbageCollector(options.gc);
 
     if (isByteLike(input)) {
-      this.compressed = Buffer.from(input);
+      this.#compressed = Buffer.from(input);
 
       return;
     }
 
-    this.setPayload(encodeSync(input, this.compressionLevel));
+    this.setPayload(encodeSync(input, this.#compressionLevel));
   }
 
   public static from<T>(input: T, options?: CompreSJONOptions): CompreSJON<T> {
@@ -125,49 +152,65 @@ export default class CompreSJON<T = JsonValue> {
     return new CompreSJON<T>(input, options);
   }
 
-  public static fromJSON<T>(payload: CompreSJONJSON, options?: CompreSJONOptions): CompreSJON<T> {
-    if (payload.format !== FORMAT || typeof payload.data !== "string") {
+  public static fromBase64<T>(input: string, options?: CompreSJONOptions): CompreSJON<T> {
+    if (!isBase64(input)) {
       throw new InvalidPayloadError();
     }
+
+    return CompreSJON.fromBuffer<T>(Buffer.from(input, "base64"), options);
+  }
+
+  public static fromJSON<T>(
+    payload: CompreSJONEnvelope,
+    options?: CompreSJONOptions,
+  ): CompreSJON<T> {
+    validatePayload(payload);
 
     const instance = new CompreSJON<T>(Buffer.from(payload.data, "base64"), {
       ...options,
       compressionLevel: options?.compressionLevel ?? payload.compressionLevel,
     });
 
-    instance.jsonBytes = payload.jsonBytes;
+    instance.#jsonBytes = payload.jsonBytes;
 
     return instance;
   }
 
+  public static fromEnvelope<T>(
+    payload: CompreSJONEnvelope,
+    options?: CompreSJONOptions,
+  ): CompreSJON<T> {
+    return CompreSJON.fromJSON<T>(payload, options);
+  }
+
   public get byteLength(): number {
-    return this.compressed.length;
+    return this.#compressed.length;
   }
 
   public get isEmpty(): boolean {
-    return this.compressed.length === 0;
+    return this.#compressed.length === 0;
   }
 
   public get stats(): CompreSJONStats {
-    const compressedBytes = this.compressed.length;
+    const compressedBytes = this.#compressed.length;
     const savingsBytes =
-      this.jsonBytes === undefined || compressedBytes === 0
+      this.#jsonBytes === undefined || compressedBytes === 0
         ? undefined
-        : this.jsonBytes - compressedBytes;
+        : this.#jsonBytes - compressedBytes;
     const ratio =
-      this.jsonBytes === undefined || compressedBytes === 0
+      this.#jsonBytes === undefined || compressedBytes === 0
         ? undefined
-        : this.jsonBytes / compressedBytes;
+        : this.#jsonBytes / compressedBytes;
     const savingsPercent =
-      this.jsonBytes === undefined || savingsBytes === undefined
+      this.#jsonBytes === undefined || savingsBytes === undefined
         ? undefined
-        : savingsBytes / this.jsonBytes;
+        : savingsBytes / this.#jsonBytes;
 
     return {
       compressedBytes,
-      compressionLevel: this.compressionLevel,
+      compressionLevel: this.#compressionLevel,
       isEmpty: compressedBytes === 0,
-      jsonBytes: this.jsonBytes,
+      jsonBytes: this.#jsonBytes,
       ratio,
       savingsBytes,
       savingsPercent,
@@ -178,16 +221,20 @@ export default class CompreSJON<T = JsonValue> {
    * @deprecated Use `toBuffer()` instead. This returns a defensive copy.
    */
   public get buffer(): Buffer {
-    return this.compressed.length === 0 ? EMPTY_BUFFER : Buffer.from(this.compressed);
+    return this.#compressed.length === 0 ? EMPTY_BUFFER : Buffer.from(this.#compressed);
+  }
+
+  public set buffer(input: Buffer) {
+    this.setPayload({ compressed: Buffer.from(input) });
   }
 
   public update(input: T): void {
-    this.setPayload(encodeSync(input, this.compressionLevel));
+    this.setPayload(encodeSync(input, this.#compressionLevel));
     this.collectGarbage("update");
   }
 
   public async updateAsync(input: T): Promise<void> {
-    this.setPayload(await encodeAsync(input, this.compressionLevel));
+    this.setPayload(await encodeAsync(input, this.#compressionLevel));
     this.collectGarbage("update");
   }
 
@@ -263,36 +310,69 @@ export default class CompreSJON<T = JsonValue> {
   /**
    * Temporarily inflate the value, run work on it, then compress it again.
    *
-   * During the callback this instance does not retain the compressed bytes.
+   * During the callback this instance is empty. The previous payload is kept as
+   * a fallback so it can be restored if recompression fails.
    */
   public process<R>(callback: (value: T) => R): R {
-    const value = this.take();
+    const previousPayload = this.releasePayload();
+    let liveValue: T;
 
     try {
-      const result = callback(value);
-      this.update(value);
-
-      return result;
+      liveValue = decodeSync<T>(previousPayload.compressed);
+      this.collectGarbage("take");
     } catch (error) {
-      this.update(value);
+      this.setPayload(previousPayload);
 
       throw error;
     }
+
+    let result: R;
+
+    try {
+      result = callback(liveValue);
+    } catch (error) {
+      this.recompressOrRestoreThenThrow(liveValue, previousPayload, error);
+    }
+
+    if (isPromiseLike(result)) {
+      observeAsyncProcessResult(result);
+
+      this.recompressOrRestoreThenThrow(
+        liveValue,
+        previousPayload,
+        new AsyncProcessCallbackError(),
+      );
+    }
+
+    this.recompressOrRestore(liveValue, previousPayload);
+
+    return result;
   }
 
   public async processAsync<R>(callback: (value: T) => R | Promise<R>): Promise<R> {
-    const value = await this.takeAsync();
+    const previousPayload = this.releasePayload();
+    let liveValue: T;
 
     try {
-      const result = await callback(value);
-      await this.updateAsync(value);
-
-      return result;
+      liveValue = await decodeAsync<T>(previousPayload.compressed);
+      this.collectGarbage("take");
     } catch (error) {
-      await this.updateAsync(value);
+      this.setPayload(previousPayload);
 
       throw error;
     }
+
+    let result!: R;
+
+    try {
+      result = await callback(liveValue);
+    } catch (error) {
+      await this.recompressAsyncOrRestoreThenThrow(liveValue, previousPayload, error);
+    }
+
+    await this.recompressAsyncOrRestore(liveValue, previousPayload);
+
+    return result;
   }
 
   public toBuffer(options: BufferOptions = {}): Buffer {
@@ -306,22 +386,34 @@ export default class CompreSJON<T = JsonValue> {
     return this.requireBuffer().toString("base64");
   }
 
-  public toJSON(): CompreSJONJSON {
+  public toEnvelope(): CompreSJONEnvelope {
     return {
       format: FORMAT,
       data: this.toBase64(),
-      compressionLevel: this.compressionLevel,
-      jsonBytes: this.jsonBytes,
+      compressionLevel: this.#compressionLevel,
+      jsonBytes: this.#jsonBytes,
     };
+  }
+
+  public toJSON(): CompreSJONEnvelope {
+    return this.toEnvelope();
   }
 
   public toString(): string {
     return JSON.stringify(this.read());
   }
 
+  public [inspect.custom](): string {
+    const stats = this.stats;
+    const jsonBytes = stats.jsonBytes ?? "unknown";
+    const ratio = stats.ratio === undefined ? "unknown" : `${stats.ratio.toFixed(2)}x`;
+
+    return `CompreSJON { compressedBytes: ${stats.compressedBytes}, jsonBytes: ${jsonBytes}, ratio: ${ratio}, isEmpty: ${stats.isEmpty} }`;
+  }
+
   public dispose(): void {
-    this.compressed = EMPTY_BUFFER;
-    this.jsonBytes = undefined;
+    this.#compressed = EMPTY_BUFFER;
+    this.#jsonBytes = undefined;
     this.collectGarbage("dispose");
   }
 
@@ -338,29 +430,81 @@ export default class CompreSJON<T = JsonValue> {
   }
 
   private requireBuffer(): Buffer {
-    if (this.compressed.length === 0) {
+    if (this.#compressed.length === 0) {
       throw new EmptyBufferError();
     }
 
-    return this.compressed;
+    return this.#compressed;
   }
 
   private releasePayload(): EncodedPayload {
     const compressed = this.requireBuffer();
-    this.compressed = EMPTY_BUFFER;
-    const jsonBytes = this.jsonBytes;
-    this.jsonBytes = undefined;
+    this.#compressed = EMPTY_BUFFER;
+    const jsonBytes = this.#jsonBytes;
+    this.#jsonBytes = undefined;
 
     return { compressed, jsonBytes };
   }
 
   private setPayload(payload: EncodedPayload): void {
-    this.compressed = payload.compressed;
-    this.jsonBytes = payload.jsonBytes;
+    this.#compressed = payload.compressed;
+    this.#jsonBytes = payload.jsonBytes;
+  }
+
+  private recompressOrRestore(value: T, previousPayload: EncodedPayload): void {
+    try {
+      this.update(value);
+    } catch (error) {
+      this.setPayload(previousPayload);
+
+      throw error;
+    }
+  }
+
+  private recompressOrRestoreThenThrow(
+    value: T,
+    previousPayload: EncodedPayload,
+    errorToThrow: unknown,
+  ): never {
+    try {
+      this.update(value);
+    } catch {
+      this.setPayload(previousPayload);
+    }
+
+    throw errorToThrow;
+  }
+
+  private async recompressAsyncOrRestore(value: T, previousPayload: EncodedPayload): Promise<void> {
+    try {
+      await this.updateAsync(value);
+    } catch (error) {
+      this.setPayload(previousPayload);
+
+      throw error;
+    }
+  }
+
+  private async recompressAsyncOrRestoreThenThrow(
+    value: T,
+    previousPayload: EncodedPayload,
+    errorToThrow: unknown,
+  ): Promise<never> {
+    try {
+      await this.updateAsync(value);
+    } catch {
+      this.setPayload(previousPayload);
+    }
+
+    throw errorToThrow;
   }
 
   private collectGarbage(phase: GarbageCollectionPhase): void {
-    this.garbageCollector?.(phase);
+    try {
+      this.#garbageCollector?.(phase);
+    } catch {
+      // GC hooks are cleanup plumbing; they must not change cache semantics.
+    }
   }
 }
 
@@ -368,12 +512,50 @@ function isByteLike(input: unknown): input is Uint8Array {
   return input instanceof Uint8Array;
 }
 
+function isPromiseLike(input: unknown): input is PromiseLike<unknown> {
+  return (
+    input !== null &&
+    (typeof input === "object" || typeof input === "function") &&
+    typeof (input as { then?: unknown }).then === "function"
+  );
+}
+
+function observeAsyncProcessResult(input: PromiseLike<unknown>): void {
+  void Promise.resolve(input).catch(() => undefined);
+}
+
 function normalizeCompressionLevel(level = CompressionLevel.Balanced): number {
-  if (!Number.isInteger(level) || level < 0 || level > 11) {
+  if (!isCompressionLevel(level)) {
     throw new RangeError("compressionLevel must be an integer from 0 to 11.");
   }
 
   return level;
+}
+
+function isCompressionLevel(level: unknown): level is number {
+  return typeof level === "number" && Number.isInteger(level) && level >= 0 && level <= 11;
+}
+
+function validatePayload(payload: CompreSJONEnvelope): void {
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    payload.format !== FORMAT ||
+    !isBase64(payload.data) ||
+    (payload.compressionLevel !== undefined && !isCompressionLevel(payload.compressionLevel)) ||
+    (payload.jsonBytes !== undefined &&
+      (!Number.isSafeInteger(payload.jsonBytes) || payload.jsonBytes < 0))
+  ) {
+    throw new InvalidPayloadError();
+  }
+}
+
+function isBase64(input: unknown): input is string {
+  if (typeof input !== "string" || input.length === 0 || input.length % 4 !== 0) {
+    return false;
+  }
+
+  return /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input);
 }
 
 function resolveGarbageCollector(gc: CompreSJONOptions["gc"]): GarbageCollector | undefined {
@@ -410,10 +592,121 @@ interface EncodedPayload {
 }
 
 function jsonToBuffer(input: unknown): Buffer {
-  return Buffer.from(JSON.stringify(input), "utf8");
+  let json: string | undefined;
+
+  try {
+    assertJsonValue(input);
+    json = JSON.stringify(input);
+  } catch (error) {
+    throw asInvalidJsonValueError(error);
+  }
+
+  if (json === undefined) {
+    throw new InvalidJsonValueError();
+  }
+
+  return Buffer.from(json, "utf8");
 }
 
-function bufferToJson<T>(input: Buffer): T {
+function assertJsonValue(input: unknown, activeObjects = new WeakSet<object>()): void {
+  assertJsonPrimitive(input);
+
+  if (input === null || typeof input !== "object") {
+    return;
+  }
+
+  if (activeObjects.has(input)) {
+    throw new TypeError("Cannot serialize circular JSON values.");
+  }
+
+  activeObjects.add(input);
+
+  if (Array.isArray(input)) {
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    const propertyNames = Object.getOwnPropertyNames(input).filter((key) => key !== "length");
+
+    if (propertyNames.length !== input.length || Object.getOwnPropertySymbols(input).length > 0) {
+      throw new InvalidJsonValueError();
+    }
+
+    for (let index = 0; index < input.length; index += 1) {
+      if (!(index in input)) {
+        throw new InvalidJsonValueError();
+      }
+
+      const descriptor = descriptors[index];
+
+      if (!descriptor || !("value" in descriptor)) {
+        throw new InvalidJsonValueError();
+      }
+
+      assertJsonValue(descriptor.value, activeObjects);
+    }
+
+    activeObjects.delete(input);
+
+    return;
+  }
+
+  if (!isPlainObject(input) || typeof (input as { toJSON?: unknown }).toJSON === "function") {
+    throw new InvalidJsonValueError();
+  }
+
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  const propertyNames = Object.keys(input);
+
+  if (propertyNames.length !== Object.getOwnPropertyNames(input).length) {
+    throw new InvalidJsonValueError();
+  }
+
+  if (Object.getOwnPropertySymbols(input).length > 0) {
+    throw new InvalidJsonValueError();
+  }
+
+  for (const key of propertyNames) {
+    const descriptor = descriptors[key];
+
+    if (!descriptor || !("value" in descriptor)) {
+      throw new InvalidJsonValueError();
+    }
+
+    assertJsonValue(descriptor.value, activeObjects);
+  }
+
+  activeObjects.delete(input);
+}
+
+function assertJsonPrimitive(input: unknown): void {
+  switch (typeof input) {
+    case "number":
+      if (!Number.isFinite(input)) {
+        throw new InvalidJsonValueError();
+      }
+
+      return;
+
+    case "undefined":
+    case "function":
+    case "symbol":
+    case "bigint":
+      throw new InvalidJsonValueError();
+
+    default:
+      return;
+  }
+}
+
+function isPlainObject(input: object): boolean {
+  const prototype = Object.getPrototypeOf(input);
+
+  return prototype === Object.prototype || prototype === null;
+}
+
+function asInvalidJsonValueError(error: unknown): InvalidJsonValueError {
+  return error instanceof InvalidJsonValueError ? error : new InvalidJsonValueError(error);
+}
+
+function bufferToValue<T>(input: Buffer): T {
   return JSON.parse(input.toString("utf8")) as T;
 }
 
@@ -432,9 +725,23 @@ async function encodeAsync(input: unknown, compressionLevel: number): Promise<En
 }
 
 function decodeSync<T>(input: Buffer): T {
-  return bufferToJson<T>(brotliDecompressSync(input));
+  try {
+    return bufferToValue<T>(brotliDecompressSync(input));
+  } catch (error) {
+    throw asInvalidCompressedDataError(error);
+  }
 }
 
 async function decodeAsync<T>(input: Buffer): Promise<T> {
-  return bufferToJson<T>(await decompress(input));
+  try {
+    return bufferToValue<T>(await decompress(input));
+  } catch (error) {
+    throw asInvalidCompressedDataError(error);
+  }
+}
+
+function asInvalidCompressedDataError(error: unknown): InvalidCompressedDataError {
+  return error instanceof InvalidCompressedDataError
+    ? error
+    : new InvalidCompressedDataError(error);
 }

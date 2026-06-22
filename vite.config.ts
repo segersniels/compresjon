@@ -10,7 +10,7 @@ export default defineConfig({
     },
     minify: false,
     rolldownOptions: {
-      external: ["node:util", "node:zlib"],
+      external: ["node:buffer", "node:util", "node:zlib"],
       output: {
         exports: "named",
       },
