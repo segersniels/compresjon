@@ -16,17 +16,26 @@ console.log(`# CompreSJON benchmark\n`);
 console.log(`Rows: ${rows.toLocaleString("en-US")}`);
 console.log(`Runs: ${runs}`);
 console.log(`Node: ${process.version}`);
-console.log(`GC exposed: ${typeof globalThis.gc === "function" ? "yes" : "no"}\n`);
-console.log("| Case | Idle bytes | Ratio vs JSON | Freeze ms | Read ms | Take ms | Process ms |");
-console.log("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+console.log(`Memory mode: ${memoryMode()}\n`);
+if (!isGcExposed()) {
+  console.log(
+    "Memory delta is a rough signal in this mode; Node decides when to clean unused memory, so the number can jump around between cases.\n",
+  );
+}
+
 console.log(
-  `| Plain JSON string | ${formatBytes(jsonBytes)} | 1.00x | ${time(() => JSON.stringify(source))} | ${time(() => JSON.parse(jsonString))} | n/a | n/a |`,
+  "| Case | Idle bytes | Memory delta | Ratio vs JSON | Freeze ms | Read ms | Take ms | Process ms |",
+);
+console.log("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+console.log(
+  `| Plain JSON string | ${formatBytes(jsonBytes)} | ${formatBytes(memoryDeltaBytes(() => JSON.stringify(makeCache(rows))))} | 1.00x | ${time(() => JSON.stringify(source))} | ${time(() => JSON.parse(jsonString))} | n/a | n/a |`,
 );
 
 for (const [name, compressionLevel] of levels) {
   const freeze = samples(() => new CompreSJON(source, { compressionLevel }));
   const compressed = new CompreSJON(source, { compressionLevel });
   const idleBytes = compressed.byteLength;
+  const memoryDelta = memoryDeltaBytes(() => new CompreSJON(makeCache(rows), { compressionLevel }));
   const read = samples(() => compressed.read());
   const take = samplesWithSetup(
     () => new CompreSJON(source, { compressionLevel }),
@@ -42,7 +51,7 @@ for (const [name, compressionLevel] of levels) {
   );
 
   console.log(
-    `| ${name} | ${formatBytes(idleBytes)} | ${(jsonBytes / idleBytes).toFixed(2)}x smaller | ${formatMs(median(freeze))} | ${formatMs(median(read))} | ${formatMs(median(take))} | ${formatMs(median(process))} |`,
+    `| ${name} | ${formatBytes(idleBytes)} | ${formatBytes(memoryDelta)} | ${(jsonBytes / idleBytes).toFixed(2)}x smaller | ${formatMs(median(freeze))} | ${formatMs(median(read))} | ${formatMs(median(take))} | ${formatMs(median(process))} |`,
   );
 }
 
@@ -87,8 +96,34 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
 }
 
+function memoryDeltaBytes(factory) {
+  collect();
+  const before = memoryBytes();
+  globalThis.__compresjonBenchmarkSubject = factory();
+  collect();
+  const after = memoryBytes();
+  globalThis.__compresjonBenchmarkSubject = undefined;
+  collect();
+
+  return Math.max(after - before, 0);
+}
+
+function memoryBytes() {
+  const memory = process.memoryUsage();
+
+  return memory.heapUsed + memory.arrayBuffers;
+}
+
 function collect() {
   globalThis.gc?.();
+}
+
+function memoryMode() {
+  return isGcExposed() ? "explicit globalThis.gc()" : "runtime GC only";
+}
+
+function isGcExposed() {
+  return typeof globalThis.gc === "function";
 }
 
 function makeCache(size) {
