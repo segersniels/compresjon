@@ -1,75 +1,111 @@
 # CompreSJON
 
-[![npm](https://img.shields.io/npm/v/compresjon)](https://www.npmjs.com/package/compresjon)
+`compresjon` is a tiny utility for keeping large JSON-compatible values compressed while they are idle.
 
-`compresjon` is a lightweight package designed for storing JSON data in a compressed and serialized format.
+It is meant for long-running Node.js workers that occasionally need a large in-memory cache, but do not need that cache inflated all the time.
 
-It is particularly useful for:
-- Long-running processes that require infrequent access to data, such as cold storage during interval downtimes.
-- Sending back binary data instead of JSON over API requests
+See [benchmarks](./docs/benchmarks.md) for the current size and lifecycle tradeoffs.
 
-> CompreSJON uses `msgpack` in combination with Brotli compression to ensure low memory utilization or bandwidth usage.
+## Install
 
-<p align="center">
-<img src="./resources/logo.png" width="300">
-
-## Installation
-
-```
+```sh
 npm install compresjon
 ```
 
 ## Usage
 
-Converts a JavaScript Object Notation (JSON) into its compressed counterpart.
-
 ```ts
-import CompreSJON from 'compresjon';
+import CompreSJON from "compresjon";
 
-const json = new CompreSJON({ hello: 'world' });
+let cache = buildLargeCache();
+const coldCache = new CompreSJON(cache);
 
-/**
- * CompreSJON can create an instance from a `Buffer` created by
- * another instance. Eg. if your API sends back a `Buffer` over
- * its API request, the client can create a `CompreSJON` from that `Buffer`.
- */
-const json = new CompreSJON<{ hello: 'world' }>(buffer);
+// Drop your own live reference when the cache is idle.
+cache = undefined;
+
+// Later, take() clears the compressed bytes before returning the live value.
+cache = coldCache.take();
 ```
 
-### Updating Data
-
-Override the internal compressed data with a new updated dataset.
+`read()` and its backwards-compatible alias `parse()` keep the compressed bytes around. Use them only when you intentionally want a non-destructive read.
 
 ```ts
-const json = new CompreSJON({ hello: 'world' });
-json.update({ hello: 'universe' });
-console.log(CompreSJON.parse(json)); // { hello: 'universe' }
+const coldCache = new CompreSJON({ hello: "world" });
+
+console.log(coldCache.read()); // { hello: 'world' }
+console.log(coldCache.byteLength > 0); // true
 ```
 
-### Serializing and Deserializing
+## Process And Recompress
 
-You can stringify a `CompreSJON` instance using the static `stringify` method:
+`process()` is the safest cache lifecycle for most workers: it destructively inflates, lets you mutate the live value, then recompresses it.
 
 ```ts
-const json = new CompreSJON({ hello: 'world' });
-console.log(CompreSJON.stringify(json)); // '{"hello":"world"}'
+const coldCache = new CompreSJON([{ id: 1, status: "idle" }]);
+
+coldCache.process((items) => {
+  items.push({ id: 2, status: "idle" });
+});
 ```
 
-You can convert a `CompreSJON` instance back to JSON using the static `parse` method:
+Async compression is available when you do not want Brotli work on the main event-loop turn:
 
 ```ts
-const json = new CompreSJON({ hello: 'world' });
-console.log(CompreSJON.parse(json)); // { hello: 'world' }
+const coldCache = await CompreSJON.fromAsync(largeCache);
+
+await coldCache.processAsync(async (items) => {
+  await refresh(items);
+});
 ```
 
-Keep in mind that when using `parse` that there will be two instances of the JSON data in memory during the runtime. Both the internal binary representation and the parsed JSON. So depending on your use case you can look into `dump`:
+## GC Control
+
+CompreSJON drops its own references early, but it cannot force V8 to collect memory unless your process exposes GC.
+
+For memory-sensitive workers, start Node with `--expose-gc` and pass `gc: true`:
+
+```sh
+node --expose-gc worker.js
+```
 
 ```ts
-const json = new CompreSJON({ hello: 'world' });
-console.log(CompreSJON.dump(json)); // { hello: 'world' }
-console.log(json.buffer.length); // 0
+const coldCache = new CompreSJON(largeCache, { gc: true });
+
+const liveCache = coldCache.take();
 ```
 
-Dumping the data will return the parsed JSON while also clearing the internal binary reference. This means that the only instance available, during the runtime after `dump`, is the parsed JSON. Just don't forget to `update` with the updated data once it's ready to be compressed again.
+You can also pass a hook for custom scheduling or metrics:
 
-> `CompreSJON` also has a built-in `toJSON()` method allowing it to be sent back through an API directly to the client, exposing the internal `Buffer`.
+```ts
+const coldCache = new CompreSJON(largeCache, {
+  gc: (phase) => {
+    console.log(`released memory after ${phase}`);
+  },
+});
+```
+
+The hook runs after `take`, `update`, and `dispose`.
+
+## Transport
+
+Use `toBuffer()` for binary transport or `toJSON()` for a base64 JSON envelope.
+
+```ts
+const coldCache = new CompreSJON({ hello: "world" });
+const bytes = coldCache.toBuffer();
+const restored = CompreSJON.fromBuffer<{ hello: string }>(bytes);
+```
+
+`toBuffer()` returns a defensive copy by default. Pass `{ copy: false }` only when the caller owns the returned buffer and will not mutate it.
+
+## Compression Levels
+
+```ts
+import CompreSJON, { CompressionLevel } from "compresjon";
+
+const coldCache = new CompreSJON(largeCache, {
+  compressionLevel: CompressionLevel.Balanced,
+});
+```
+
+Brotli accepts levels `0` through `11`. Higher levels can be dramatically slower; `Balanced` is the default.
