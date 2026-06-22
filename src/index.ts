@@ -1,216 +1,377 @@
-import { EmptyBufferError } from 'helpers/Error';
-import type Input from 'types/Input';
-import JsonValue from 'types/JsonValue';
-import { brotliCompressSync, brotliDecompressSync, constants } from 'zlib';
-import { encode, decode } from '@msgpack/msgpack';
-import CompressionLevel from 'enums/CompressionLevel';
+import {
+  brotliCompress,
+  brotliCompressSync,
+  brotliDecompress,
+  brotliDecompressSync,
+  constants,
+} from "node:zlib";
+import { promisify } from "node:util";
 
-export { default as CompressionLevel } from 'enums/CompressionLevel';
+const compress = promisify(brotliCompress);
+const decompress = promisify(brotliDecompress);
+const FORMAT = "compresjon/brotli-json/v1";
+const EMPTY_BUFFER = Buffer.alloc(0);
 
-interface Options {
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonObject = { [key: string]: JsonValue };
+export type JsonArray = JsonValue[];
+export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
+export type GarbageCollectionPhase = "take" | "update" | "dispose";
+export type GarbageCollector = (phase: GarbageCollectionPhase) => void;
+
+export enum CompressionLevel {
+  Fast = 1,
+  Balanced = 5,
+  Dense = 8,
+  Maximum = 11,
+  Lowest = Fast,
+  Default = Balanced,
+  Highest = Maximum,
+}
+
+export interface CompreSJONOptions {
   /**
-   * The compression level to use when compressing the JSON. Default is `CompressionLevel.Default`.
+   * Brotli quality from 0 to 11. Higher values can be dramatically slower.
    */
   compressionLevel?: CompressionLevel | number;
+  /**
+   * Explicit GC hook for memory-sensitive workers.
+   *
+   * `true` calls `globalThis.gc()` when Node was started with `--expose-gc`.
+   * A function can be used for custom scheduling, metrics, or tests.
+   */
+  gc?: boolean | GarbageCollector;
+}
+
+export interface BufferOptions {
+  /**
+   * Return a defensive copy of the compressed bytes.
+   *
+   * Disable this only when the caller owns the returned buffer and will not mutate it.
+   */
+  copy?: boolean;
+}
+
+export interface CompreSJONJSON {
+  format: typeof FORMAT;
+  data: string;
+}
+
+export class EmptyBufferError extends Error {
+  constructor() {
+    super("The compressed data has already been consumed. Call update() before reading it again.");
+  }
+}
+
+export class InvalidPayloadError extends Error {
+  constructor() {
+    super("Expected a CompreSJON JSON payload.");
+  }
 }
 
 /**
- * An optimized JSON object that has been serialized and compressed.
+ * Cold storage for large JSON-compatible values.
  *
- * ```ts
- * import CompreSJON from 'compresjon';
- *
- * const json = new CompreSJON({ hello: 'world' });
- * ```
+ * Keep application data in this compressed wrapper while it is idle, then use
+ * `take()` or `process()` to avoid retaining compressed bytes while the live
+ * JavaScript value is being worked on.
  */
-export default class CompreSJON<T extends Input> {
-  public buffer: Buffer;
-  private readonly compressionLevel: CompressionLevel | number =
-    CompressionLevel.Default;
+export default class CompreSJON<T = JsonValue> {
+  private compressed: Buffer;
+  private readonly compressionLevel: number;
+  private readonly garbageCollector?: GarbageCollector;
 
-  constructor(input: T | Buffer, options?: Options) {
-    if (options?.compressionLevel) {
-      this.compressionLevel = options.compressionLevel;
+  constructor(input: T | Uint8Array, options: CompreSJONOptions = {}) {
+    this.compressionLevel = normalizeCompressionLevel(options.compressionLevel);
+    this.garbageCollector = resolveGarbageCollector(options.gc);
+
+    if (isByteLike(input)) {
+      this.compressed = Buffer.from(input);
+
+      return;
     }
 
-    if (Buffer.isBuffer(input)) {
-      this.buffer = input;
-    } else {
-      this.buffer = this._serialize(input);
+    this.compressed = encodeSync(input, this.compressionLevel);
+  }
+
+  public static from<T>(input: T, options?: CompreSJONOptions): CompreSJON<T> {
+    return new CompreSJON(input, options);
+  }
+
+  public static async fromAsync<T>(
+    input: T,
+    options: CompreSJONOptions = {},
+  ): Promise<CompreSJON<T>> {
+    const instance = new CompreSJON<T>(Buffer.alloc(0), options);
+    await instance.updateAsync(input);
+
+    return instance;
+  }
+
+  public static fromBuffer<T>(input: Uint8Array, options?: CompreSJONOptions): CompreSJON<T> {
+    return new CompreSJON<T>(input, options);
+  }
+
+  public static fromJSON<T>(payload: CompreSJONJSON, options?: CompreSJONOptions): CompreSJON<T> {
+    if (payload.format !== FORMAT || typeof payload.data !== "string") {
+      throw new InvalidPayloadError();
+    }
+
+    return new CompreSJON<T>(Buffer.from(payload.data, "base64"), options);
+  }
+
+  public get byteLength(): number {
+    return this.compressed.length;
+  }
+
+  public get isEmpty(): boolean {
+    return this.compressed.length === 0;
+  }
+
+  /**
+   * @deprecated Use `toBuffer()` instead. This returns a defensive copy.
+   */
+  public get buffer(): Buffer {
+    return this.compressed.length === 0 ? EMPTY_BUFFER : Buffer.from(this.compressed);
+  }
+
+  public update(input: T): void {
+    this.compressed = encodeSync(input, this.compressionLevel);
+    this.collectGarbage("update");
+  }
+
+  public async updateAsync(input: T): Promise<void> {
+    this.compressed = await encodeAsync(input, this.compressionLevel);
+    this.collectGarbage("update");
+  }
+
+  /**
+   * Read without consuming the compressed bytes.
+   *
+   * Prefer `take()` or `process()` for idle-cache workflows where avoiding a
+   * retained compressed copy matters.
+   */
+  public read(): T {
+    return decodeSync(this.requireBuffer());
+  }
+
+  /**
+   * Backwards-compatible alias for `read()`.
+   *
+   * Prefer `take()` or `process()` for memory-sensitive workflows.
+   */
+  public parse(): T {
+    return this.read();
+  }
+
+  public async readAsync(): Promise<T> {
+    return decodeAsync(this.requireBuffer());
+  }
+
+  /**
+   * Consume the compressed bytes before returning the live JSON value.
+   */
+  public take(): T {
+    let compressed: Buffer | undefined = this.releaseBuffer();
+
+    try {
+      const value = decodeSync<T>(compressed);
+      compressed = undefined;
+      this.collectGarbage("take");
+
+      return value;
+    } catch (error) {
+      if (compressed) {
+        this.compressed = compressed;
+      }
+
+      throw error;
     }
   }
 
-  private _serialize(input: Input): Buffer {
-    const buffer = encode(input);
-
-    /**
-     * @see https://nodejs.org/api/html#zlib_class_brotlioptions
-     */
-    return brotliCompressSync(buffer, {
-      params: {
-        [constants.BROTLI_PARAM_MODE]: constants.BROTLI_MODE_TEXT,
-        [constants.BROTLI_PARAM_QUALITY]: this.compressionLevel,
-        [constants.BROTLI_PARAM_SIZE_HINT]: buffer.length,
-      },
-    });
+  /**
+   * Backwards-compatible alias for `take()`.
+   */
+  public dump(): T {
+    return this.take();
   }
 
-  private _deserialize(): T {
-    const data = brotliDecompressSync(this.buffer);
+  public async takeAsync(): Promise<T> {
+    let compressed: Buffer | undefined = this.releaseBuffer();
 
-    return decode(data) as T;
-  }
+    try {
+      const value = await decodeAsync<T>(compressed);
+      compressed = undefined;
+      this.collectGarbage("take");
 
-  private _destructiveDeserialize(): T {
-    const data = brotliDecompressSync(this.buffer);
-    this.buffer = Buffer.alloc(0);
+      return value;
+    } catch (error) {
+      if (compressed) {
+        this.compressed = compressed;
+      }
 
-    return decode(data) as T;
+      throw error;
+    }
   }
 
   /**
-   * Replaces the existing data within the buffer with the new data.
+   * Temporarily inflate the value, run work on it, then compress it again.
    *
-   * ```ts
-   * const json = new CompreSJON({ hello: 'world' });
-   * json.update({ hello: 'universe' });
-   * console.log(CompreSJON.parse(json)); // { hello: 'universe' }
-   * ```
+   * During the callback this instance does not retain the compressed bytes.
    */
-  public update(input: T extends Array<infer U> ? Array<U> : JsonValue) {
-    this.buffer = this._serialize(input);
+  public process<R>(callback: (value: T) => R): R {
+    const value = this.take();
+
+    try {
+      const result = callback(value);
+      this.update(value);
+
+      return result;
+    } catch (error) {
+      this.update(value);
+
+      throw error;
+    }
   }
 
-  /**
-   * Allows you to process the JavaScript Object Notation (JSON) representation of the internal
-   * buffer without having to worry about having two copies of the data in memory. This is identical
-   * to doing:
-   *
-   * ```ts
-   * const json = new CompreSJON({ hello: 'world' });
-   * const data = CompreSJON.dump(json);
-   * // Perform logic on data
-   * json.update(data);
-   * ```
-   *
-   * @param cb A callback function that will be called with the parsed data.
-   *
-   * ```ts
-   * const json = new CompreSJON({ hello: 'world' });
-   * json.process((data) => console.log(data)); // { hello: 'world' }
-   * ```
-   */
-  public process(cb: (json: T) => void) {
-    const data = this._destructiveDeserialize();
-    cb(data);
+  public async processAsync<R>(callback: (value: T) => R | Promise<R>): Promise<R> {
+    const value = await this.takeAsync();
 
-    this.buffer = this._serialize(data);
+    try {
+      const result = await callback(value);
+      await this.updateAsync(value);
+
+      return result;
+    } catch (error) {
+      await this.updateAsync(value);
+
+      throw error;
+    }
   }
 
-  /**
-   * @deprecated The intended use case of this method is to allow API frameworks to leverage
-   * the `CompreSJON` class as a response type. This method will be called
-   * automatically by `JSON.stringify` when the `CompreSJON` class is passed in.
-   *
-   * This returns the raw buffer of the compressed JSON.
-   */
-  public toJSON() {
-    return this.buffer;
+  public toBuffer(options: BufferOptions = {}): Buffer {
+    const { copy = true } = options;
+    const compressed = this.requireBuffer();
+
+    return copy ? Buffer.from(compressed) : compressed;
   }
 
-  /**
-   * Converts a JavaScript Object Notation (JSON) into a CompreSJON.
-   *
-   * ```ts
-   * const json = new CompreSJON({ hello: 'world' });
-   * console.log(json.stringify()); // '{"hello":"world"}'
-   * ```
-   */
+  public toBase64(): string {
+    return this.requireBuffer().toString("base64");
+  }
+
+  public toJSON(): CompreSJONJSON {
+    return {
+      format: FORMAT,
+      data: this.toBase64(),
+    };
+  }
+
   public toString(): string {
-    const data = this._deserialize();
-
-    return JSON.stringify(data);
+    return JSON.stringify(this.read());
   }
 
-  /**
-   * Converts a JavaScript Object Notation (JSON) into a CompreSJON.
-   *
-   * ```ts
-   * const json = new CompreSJON({ hello: 'world' });
-   * console.log(CompreSJON.stringify(json)); // '{"hello":"world"}'
-   * ```
-   */
-  public static stringify<T extends Input>(json: CompreSJON<T>): string {
-    return json.toString();
+  public dispose(): void {
+    this.compressed = EMPTY_BUFFER;
+    this.collectGarbage("dispose");
   }
 
-  /**
-   * Converts a CompreSJON into a JavaScript Object Notation (JSON).
-   *
-   * ```ts
-   * const json = new CompreSJON({ hello: 'world' });
-   * const data = json.parse();
-   * console.log(data); // { hello: 'world' }
-   * ```
-   */
-  public parse() {
-    if (this.buffer.length === 0) {
-      throw new EmptyBufferError();
-    }
-
-    return this._deserialize();
-  }
-
-  /**
-   * Converts a CompreSJON into a JavaScript Object Notation (JSON).
-   *
-   * ```ts
-   * const json = new CompreSJON({ hello: 'world' });
-   * const data = CompreSJON.parse(json);
-   * console.log(data); // { hello: 'world' }
-   * ```
-   */
-  public static parse<T extends Input>(json: CompreSJON<T>) {
+  public static parse<T>(json: CompreSJON<T>): T {
     return json.parse();
   }
 
-  /**
-   * Similar to `CompreSJON.parse`, but empties the internal buffer in the
-   * process. This is useful if you want to avoid having two copies of the data
-   * in memory.
-   *
-   * __Attention: This is a destructive action and will clear the internal buffer.__
-   *
-   * ```ts
-   * const json = new CompreSJON({ hello: 'world' });
-   * const data = json.dump();
-   * console.log(data); // { hello: 'world' }
-   * console.log(json.buffer.length); // 0
-   * ```
-   */
-  public dump() {
-    if (this.buffer.length === 0) {
+  public static dump<T>(json: CompreSJON<T>): T {
+    return json.dump();
+  }
+
+  public static stringify<T>(json: CompreSJON<T>): string {
+    return json.toString();
+  }
+
+  private requireBuffer(): Buffer {
+    if (this.compressed.length === 0) {
       throw new EmptyBufferError();
     }
 
-    return this._destructiveDeserialize();
+    return this.compressed;
   }
 
-  /**
-   * Similar to `CompreSJON.parse`, but empties the internal buffer in the
-   * process. This is useful if you want to avoid having two copies of the data
-   * in memory.
-   *
-   * __Attention: This is a destructive action and will clear the internal buffer.__
-   *
-   * ```ts
-   * const json = new CompreSJON({ hello: 'world' });
-   * const data = CompreSJON.dump(json);
-   * console.log(data); // { hello: 'world' }
-   * console.log(json.buffer.length); // 0
-   * ```
-   */
-  public static dump<T extends Input>(json: CompreSJON<T>) {
-    return json.dump();
+  private releaseBuffer(): Buffer {
+    const compressed = this.requireBuffer();
+    this.compressed = EMPTY_BUFFER;
+
+    return compressed;
   }
+
+  private collectGarbage(phase: GarbageCollectionPhase): void {
+    this.garbageCollector?.(phase);
+  }
+}
+
+function isByteLike(input: unknown): input is Uint8Array {
+  return input instanceof Uint8Array;
+}
+
+function normalizeCompressionLevel(level = CompressionLevel.Balanced): number {
+  if (!Number.isInteger(level) || level < 0 || level > 11) {
+    throw new RangeError("compressionLevel must be an integer from 0 to 11.");
+  }
+
+  return level;
+}
+
+function resolveGarbageCollector(gc: CompreSJONOptions["gc"]): GarbageCollector | undefined {
+  if (typeof gc === "function") {
+    return gc;
+  }
+
+  if (gc !== true) {
+    return undefined;
+  }
+
+  return () => {
+    const exposedGc = (globalThis as { gc?: () => void }).gc;
+
+    if (exposedGc) {
+      exposedGc();
+    }
+  };
+}
+
+function brotliOptions(compressionLevel: number, sizeHint: number) {
+  return {
+    params: {
+      [constants.BROTLI_PARAM_MODE]: constants.BROTLI_MODE_TEXT,
+      [constants.BROTLI_PARAM_QUALITY]: compressionLevel,
+      [constants.BROTLI_PARAM_SIZE_HINT]: sizeHint,
+    },
+  };
+}
+
+function jsonToBuffer(input: unknown): Buffer {
+  return Buffer.from(JSON.stringify(input), "utf8");
+}
+
+function bufferToJson<T>(input: Buffer): T {
+  return JSON.parse(input.toString("utf8")) as T;
+}
+
+function encodeSync(input: unknown, compressionLevel: number): Buffer {
+  const json = jsonToBuffer(input);
+
+  return brotliCompressSync(json, brotliOptions(compressionLevel, json.length));
+}
+
+async function encodeAsync(input: unknown, compressionLevel: number): Promise<Buffer> {
+  const json = jsonToBuffer(input);
+
+  return compress(json, brotliOptions(compressionLevel, json.length));
+}
+
+function decodeSync<T>(input: Buffer): T {
+  return bufferToJson<T>(brotliDecompressSync(input));
+}
+
+async function decodeAsync<T>(input: Buffer): Promise<T> {
+  return bufferToJson<T>(await decompress(input));
 }

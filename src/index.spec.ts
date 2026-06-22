@@ -1,122 +1,171 @@
-import CompreSJON from './index';
-import { expect } from 'chai';
+import CompreSJON, {
+  CompressionLevel,
+  EmptyBufferError,
+  InvalidPayloadError,
+  type CompreSJONJSON,
+} from "./index";
+import { describe, expect, it } from "vitest";
 
-describe('CompreSJON', () => {
-  describe('object', () => {
-    let json: CompreSJON<Record<string, string>>;
+interface CacheEntry {
+  id: number;
+  status: "idle" | "busy";
+  payload: string;
+}
 
-    beforeEach(() => {
-      json = new CompreSJON({ hello: 'world' });
-    });
+describe("CompreSJON", () => {
+  it("keeps JSON data compressed until it is read", () => {
+    const source = makeCache(1_000);
+    const jsonSize = Buffer.byteLength(JSON.stringify(source));
+    const cache = new CompreSJON(source);
 
-    describe('constructor', () => {
-      it('should create a new instance from a Buffer', () => {
-        const instance = new CompreSJON<Record<string, string>>(json.buffer);
-
-        expect(instance.buffer.equals(json.buffer)).to.be.true;
-      });
-    });
-
-    describe('stringify', () => {
-      it('should stringify the data', () => {
-        const stringified = CompreSJON.stringify(json);
-
-        expect(stringified).to.equal('{"hello":"world"}');
-      });
-    });
-
-    describe('parse', () => {
-      it('should parse the data', () => {
-        const parsed = CompreSJON.parse(json);
-
-        expect(parsed).to.deep.equal({ hello: 'world' });
-      });
-    });
-
-    describe('update', () => {
-      it('should update the data', () => {
-        json.update({ hello: 'you' });
-        const parsed = CompreSJON.parse(json);
-
-        expect(parsed).to.deep.equal({
-          hello: 'you',
-        });
-      });
-    });
-
-    describe('dump', () => {
-      it('should dump the data', () => {
-        const parsed = CompreSJON.dump(json);
-
-        expect(json.buffer).to.have.length(0);
-        expect(parsed).to.deep.equal({
-          hello: 'world',
-        });
-      });
-    });
+    expect(cache.byteLength).toBeLessThan(jsonSize);
+    expect(cache.read()).toEqual(source);
+    expect(cache.byteLength).toBeGreaterThan(0);
   });
 
-  describe('array', () => {
-    let json: CompreSJON<string[]>;
+  it("takes data destructively to avoid retaining compressed bytes", () => {
+    const cache = new CompreSJON(makeCache(50));
+    const value = cache.take();
 
-    beforeEach(() => {
-      json = new CompreSJON(['hello', 'world']);
+    expect(value).toHaveLength(50);
+    expect(cache.byteLength).toBe(0);
+    expect(cache.isEmpty).toBe(true);
+    expect(() => cache.read()).toThrow(EmptyBufferError);
+  });
+
+  it("uses dump as a backwards-compatible destructive alias", () => {
+    const cache = new CompreSJON({ hello: "world" });
+
+    expect(cache.dump()).toEqual({ hello: "world" });
+    expect(cache.isEmpty).toBe(true);
+  });
+
+  it("processes mutable data without retaining compressed bytes during work", () => {
+    const cache = new CompreSJON<CacheEntry[]>(makeCache(2));
+
+    const count = cache.process((entries) => {
+      expect(cache.isEmpty).toBe(true);
+      entries.push({ id: 3, status: "idle", payload: "new" });
+
+      return entries.length;
     });
 
-    describe('stringify', () => {
-      it('should stringify the data', () => {
-        const stringified = CompreSJON.stringify(json);
+    expect(count).toBe(3);
+    expect(cache.read()).toHaveLength(3);
+  });
 
-        expect(stringified).to.equal('["hello","world"]');
+  it("restores compressed data when process throws", () => {
+    const cache = new CompreSJON({ attempts: 1 });
+
+    expect(() => {
+      cache.process((value) => {
+        value.attempts += 1;
+
+        throw new Error("boom");
       });
+    }).toThrow("boom");
+
+    expect(cache.read()).toEqual({ attempts: 2 });
+  });
+
+  it("updates the compressed value", () => {
+    const cache = new CompreSJON({ hello: "world" });
+
+    cache.update({ hello: "universe" });
+
+    expect(cache.read()).toEqual({ hello: "universe" });
+  });
+
+  it("round-trips through a defensive buffer copy", () => {
+    const cache = new CompreSJON({ hello: "world" });
+    const buffer = cache.toBuffer();
+
+    buffer.fill(0);
+
+    expect(cache.read()).toEqual({ hello: "world" });
+  });
+
+  it("can be restored from compressed bytes", () => {
+    const cache = new CompreSJON({ hello: "world" });
+    const restored = CompreSJON.fromBuffer<{ hello: string }>(cache.toBuffer());
+
+    expect(restored.read()).toEqual({ hello: "world" });
+  });
+
+  it("keeps a read-only buffer compatibility getter", () => {
+    const cache = new CompreSJON({ hello: "world" });
+    const buffer = cache.buffer;
+
+    buffer.fill(0);
+
+    expect(cache.read()).toEqual({ hello: "world" });
+  });
+
+  it("serializes to a transport-safe JSON envelope", () => {
+    const cache = new CompreSJON({ hello: "world" });
+    const payload = cache.toJSON();
+    const restored = CompreSJON.fromJSON<{ hello: string }>(payload);
+
+    expect(JSON.parse(JSON.stringify(cache))).toEqual(payload);
+    expect(restored.read()).toEqual({ hello: "world" });
+  });
+
+  it("rejects invalid JSON envelopes", () => {
+    const payload = { format: "nope", data: "abc" } as unknown as CompreSJONJSON;
+
+    expect(() => CompreSJON.fromJSON(payload)).toThrow(InvalidPayloadError);
+  });
+
+  it("supports async compression and destructive async reads", async () => {
+    const cache = await CompreSJON.fromAsync(makeCache(25), {
+      compressionLevel: CompressionLevel.Fast,
     });
 
-    describe('parse', () => {
-      it('should parse the data', () => {
-        const parsed = CompreSJON.parse(json);
+    expect(await cache.takeAsync()).toHaveLength(25);
+    expect(cache.isEmpty).toBe(true);
+  });
 
-        expect(parsed).to.deep.equal(['hello', 'world']);
-      });
+  it("supports async processing", async () => {
+    const cache = new CompreSJON<CacheEntry[]>(makeCache(1));
+
+    await cache.processAsync(async (entries) => {
+      expect(cache.isEmpty).toBe(true);
+      entries[0].status = "busy";
     });
 
-    describe('update', () => {
-      it('should update the data', () => {
-        json.update(['hello', 'you']);
-        const parsed = CompreSJON.parse(json);
+    expect(cache.read()[0].status).toBe("busy");
+  });
 
-        expect(parsed).to.deep.equal(['hello', 'you']);
-      });
-    });
+  it("offers an explicit GC hook for memory-sensitive workers", () => {
+    const phases: string[] = [];
+    const cache = new CompreSJON({ hello: "world" }, { gc: (phase) => phases.push(phase) });
 
-    describe('dump', () => {
-      it('should dump the data', () => {
-        const parsed = CompreSJON.dump(json);
+    cache.take();
+    cache.update({ hello: "again" });
+    cache.dispose();
 
-        expect(json.buffer).to.have.length(0);
-        expect(parsed).to.deep.equal(['hello', 'world']);
-      });
-    });
+    expect(phases).toEqual(["take", "update", "dispose"]);
+    expect(cache.isEmpty).toBe(true);
+  });
 
-    describe('process', () => {
-      it('should dump the internal data while processing', () => {
-        json.process((data) => {
-          expect(json.buffer).to.have.length(0);
-          expect(data).to.deep.equal(['hello', 'world']);
-        });
+  it("accepts Brotli level 0 and rejects invalid levels", () => {
+    expect(() => new CompreSJON({ ok: true }, { compressionLevel: 0 })).not.toThrow();
+    expect(CompressionLevel.Default).toBe(CompressionLevel.Balanced);
+    expect(() => new CompreSJON({ ok: true }, { compressionLevel: 12 })).toThrow(RangeError);
+  });
 
-        const parsed = CompreSJON.parse(json);
-        expect(parsed).to.deep.equal(['hello', 'world']);
-      });
+  it("keeps backwards-compatible parse and stringify helpers", () => {
+    const cache = new CompreSJON(["hello", "world"]);
 
-      it('should persist mutated data', () => {
-        json.process((data) => {
-          data.push('foo');
-          expect(json.buffer).to.have.length(0);
-        });
-
-        const parsed = CompreSJON.parse(json);
-        expect(parsed).to.deep.equal(['hello', 'world', 'foo']);
-      });
-    });
+    expect(CompreSJON.parse(cache)).toEqual(["hello", "world"]);
+    expect(CompreSJON.stringify(cache)).toBe('["hello","world"]');
   });
 });
+
+function makeCache(size: number): CacheEntry[] {
+  return Array.from({ length: size }, (_, index) => ({
+    id: index,
+    status: index % 2 === 0 ? "idle" : "busy",
+    payload: `repeatable payload ${index % 10}`,
+  }));
+}
