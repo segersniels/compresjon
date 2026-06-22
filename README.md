@@ -6,6 +6,10 @@ It is meant for long-running Node.js workers that occasionally need a large in-m
 
 See [benchmarks](./docs/benchmarks.md) for the current size and lifecycle tradeoffs.
 
+## Use Cases
+
+CompreSJON is useful when JSON is large, expensive to rebuild, and idle more often than it is read. See [use cases](./docs/use-cases.md) for examples where that tradeoff tends to pay off.
+
 ## Install
 
 ```sh
