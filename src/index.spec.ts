@@ -19,6 +19,15 @@ describe("CompreSJON", () => {
     const cache = new CompreSJON(source);
 
     expect(cache.byteLength).toBeLessThan(jsonSize);
+    expect(cache.stats).toMatchObject({
+      compressedBytes: cache.byteLength,
+      compressionLevel: CompressionLevel.Balanced,
+      isEmpty: false,
+      jsonBytes: jsonSize,
+      savingsBytes: jsonSize - cache.byteLength,
+    });
+    expect(cache.stats.ratio).toBeGreaterThan(1);
+    expect(cache.stats.savingsPercent).toBeGreaterThan(0);
     expect(cache.read()).toEqual(source);
     expect(cache.byteLength).toBeGreaterThan(0);
   });
@@ -30,6 +39,15 @@ describe("CompreSJON", () => {
     expect(value).toHaveLength(50);
     expect(cache.byteLength).toBe(0);
     expect(cache.isEmpty).toBe(true);
+    expect(cache.stats).toEqual({
+      compressedBytes: 0,
+      compressionLevel: CompressionLevel.Balanced,
+      isEmpty: true,
+      jsonBytes: undefined,
+      ratio: undefined,
+      savingsBytes: undefined,
+      savingsPercent: undefined,
+    });
     expect(() => cache.read()).toThrow(EmptyBufferError);
   });
 
@@ -90,6 +108,8 @@ describe("CompreSJON", () => {
     const restored = CompreSJON.fromBuffer<{ hello: string }>(cache.toBuffer());
 
     expect(restored.read()).toEqual({ hello: "world" });
+    expect(restored.stats.jsonBytes).toBeUndefined();
+    expect(restored.stats.ratio).toBeUndefined();
   });
 
   it("keeps a read-only buffer compatibility getter", () => {
@@ -108,6 +128,7 @@ describe("CompreSJON", () => {
 
     expect(JSON.parse(JSON.stringify(cache))).toEqual(payload);
     expect(restored.read()).toEqual({ hello: "world" });
+    expect(restored.stats).toEqual(cache.stats);
   });
 
   it("rejects invalid JSON envelopes", () => {
@@ -146,6 +167,7 @@ describe("CompreSJON", () => {
 
     expect(phases).toEqual(["take", "update", "dispose"]);
     expect(cache.isEmpty).toBe(true);
+    expect(cache.stats.jsonBytes).toBeUndefined();
   });
 
   it("accepts Brotli level 0 and rejects invalid levels", () => {

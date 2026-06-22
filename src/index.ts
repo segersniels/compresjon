@@ -55,6 +55,18 @@ export interface BufferOptions {
 export interface CompreSJONJSON {
   format: typeof FORMAT;
   data: string;
+  compressionLevel?: number;
+  jsonBytes?: number;
+}
+
+export interface CompreSJONStats {
+  compressedBytes: number;
+  compressionLevel: number;
+  isEmpty: boolean;
+  jsonBytes?: number;
+  ratio?: number;
+  savingsBytes?: number;
+  savingsPercent?: number;
 }
 
 export class EmptyBufferError extends Error {
@@ -77,7 +89,8 @@ export class InvalidPayloadError extends Error {
  * JavaScript value is being worked on.
  */
 export default class CompreSJON<T = JsonValue> {
-  private compressed: Buffer;
+  private compressed: Buffer = EMPTY_BUFFER;
+  private jsonBytes?: number;
   private readonly compressionLevel: number;
   private readonly garbageCollector?: GarbageCollector;
 
@@ -91,7 +104,7 @@ export default class CompreSJON<T = JsonValue> {
       return;
     }
 
-    this.compressed = encodeSync(input, this.compressionLevel);
+    this.setPayload(encodeSync(input, this.compressionLevel));
   }
 
   public static from<T>(input: T, options?: CompreSJONOptions): CompreSJON<T> {
@@ -117,7 +130,14 @@ export default class CompreSJON<T = JsonValue> {
       throw new InvalidPayloadError();
     }
 
-    return new CompreSJON<T>(Buffer.from(payload.data, "base64"), options);
+    const instance = new CompreSJON<T>(Buffer.from(payload.data, "base64"), {
+      ...options,
+      compressionLevel: options?.compressionLevel ?? payload.compressionLevel,
+    });
+
+    instance.jsonBytes = payload.jsonBytes;
+
+    return instance;
   }
 
   public get byteLength(): number {
@@ -128,6 +148,32 @@ export default class CompreSJON<T = JsonValue> {
     return this.compressed.length === 0;
   }
 
+  public get stats(): CompreSJONStats {
+    const compressedBytes = this.compressed.length;
+    const savingsBytes =
+      this.jsonBytes === undefined || compressedBytes === 0
+        ? undefined
+        : this.jsonBytes - compressedBytes;
+    const ratio =
+      this.jsonBytes === undefined || compressedBytes === 0
+        ? undefined
+        : this.jsonBytes / compressedBytes;
+    const savingsPercent =
+      this.jsonBytes === undefined || savingsBytes === undefined
+        ? undefined
+        : savingsBytes / this.jsonBytes;
+
+    return {
+      compressedBytes,
+      compressionLevel: this.compressionLevel,
+      isEmpty: compressedBytes === 0,
+      jsonBytes: this.jsonBytes,
+      ratio,
+      savingsBytes,
+      savingsPercent,
+    };
+  }
+
   /**
    * @deprecated Use `toBuffer()` instead. This returns a defensive copy.
    */
@@ -136,12 +182,12 @@ export default class CompreSJON<T = JsonValue> {
   }
 
   public update(input: T): void {
-    this.compressed = encodeSync(input, this.compressionLevel);
+    this.setPayload(encodeSync(input, this.compressionLevel));
     this.collectGarbage("update");
   }
 
   public async updateAsync(input: T): Promise<void> {
-    this.compressed = await encodeAsync(input, this.compressionLevel);
+    this.setPayload(await encodeAsync(input, this.compressionLevel));
     this.collectGarbage("update");
   }
 
@@ -172,17 +218,17 @@ export default class CompreSJON<T = JsonValue> {
    * Consume the compressed bytes before returning the live JSON value.
    */
   public take(): T {
-    let compressed: Buffer | undefined = this.releaseBuffer();
+    let payload: EncodedPayload | undefined = this.releasePayload();
 
     try {
-      const value = decodeSync<T>(compressed);
-      compressed = undefined;
+      const value = decodeSync<T>(payload.compressed);
+      payload = undefined;
       this.collectGarbage("take");
 
       return value;
     } catch (error) {
-      if (compressed) {
-        this.compressed = compressed;
+      if (payload) {
+        this.setPayload(payload);
       }
 
       throw error;
@@ -197,17 +243,17 @@ export default class CompreSJON<T = JsonValue> {
   }
 
   public async takeAsync(): Promise<T> {
-    let compressed: Buffer | undefined = this.releaseBuffer();
+    let payload: EncodedPayload | undefined = this.releasePayload();
 
     try {
-      const value = await decodeAsync<T>(compressed);
-      compressed = undefined;
+      const value = await decodeAsync<T>(payload.compressed);
+      payload = undefined;
       this.collectGarbage("take");
 
       return value;
     } catch (error) {
-      if (compressed) {
-        this.compressed = compressed;
+      if (payload) {
+        this.setPayload(payload);
       }
 
       throw error;
@@ -264,6 +310,8 @@ export default class CompreSJON<T = JsonValue> {
     return {
       format: FORMAT,
       data: this.toBase64(),
+      compressionLevel: this.compressionLevel,
+      jsonBytes: this.jsonBytes,
     };
   }
 
@@ -273,6 +321,7 @@ export default class CompreSJON<T = JsonValue> {
 
   public dispose(): void {
     this.compressed = EMPTY_BUFFER;
+    this.jsonBytes = undefined;
     this.collectGarbage("dispose");
   }
 
@@ -296,11 +345,18 @@ export default class CompreSJON<T = JsonValue> {
     return this.compressed;
   }
 
-  private releaseBuffer(): Buffer {
+  private releasePayload(): EncodedPayload {
     const compressed = this.requireBuffer();
     this.compressed = EMPTY_BUFFER;
+    const jsonBytes = this.jsonBytes;
+    this.jsonBytes = undefined;
 
-    return compressed;
+    return { compressed, jsonBytes };
+  }
+
+  private setPayload(payload: EncodedPayload): void {
+    this.compressed = payload.compressed;
+    this.jsonBytes = payload.jsonBytes;
   }
 
   private collectGarbage(phase: GarbageCollectionPhase): void {
@@ -348,6 +404,11 @@ function brotliOptions(compressionLevel: number, sizeHint: number) {
   };
 }
 
+interface EncodedPayload {
+  compressed: Buffer;
+  jsonBytes?: number;
+}
+
 function jsonToBuffer(input: unknown): Buffer {
   return Buffer.from(JSON.stringify(input), "utf8");
 }
@@ -356,16 +417,18 @@ function bufferToJson<T>(input: Buffer): T {
   return JSON.parse(input.toString("utf8")) as T;
 }
 
-function encodeSync(input: unknown, compressionLevel: number): Buffer {
+function encodeSync(input: unknown, compressionLevel: number): EncodedPayload {
   const json = jsonToBuffer(input);
+  const compressed = brotliCompressSync(json, brotliOptions(compressionLevel, json.length));
 
-  return brotliCompressSync(json, brotliOptions(compressionLevel, json.length));
+  return { compressed, jsonBytes: json.length };
 }
 
-async function encodeAsync(input: unknown, compressionLevel: number): Promise<Buffer> {
+async function encodeAsync(input: unknown, compressionLevel: number): Promise<EncodedPayload> {
   const json = jsonToBuffer(input);
+  const compressed = await compress(json, brotliOptions(compressionLevel, json.length));
 
-  return compress(json, brotliOptions(compressionLevel, json.length));
+  return { compressed, jsonBytes: json.length };
 }
 
 function decodeSync<T>(input: Buffer): T {

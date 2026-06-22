@@ -36,6 +36,27 @@ console.log(coldCache.read()); // { hello: 'world' }
 console.log(coldCache.byteLength > 0); // true
 ```
 
+## Stats
+
+Use `stats` to inspect the current cold payload without inflating it.
+
+```ts
+const coldCache = new CompreSJON(largeCache);
+
+console.log(coldCache.stats);
+// {
+//   compressedBytes: 1104586,
+//   jsonBytes: 22787451,
+//   ratio: 20.63,
+//   savingsBytes: 21682865,
+//   savingsPercent: 0.95,
+//   compressionLevel: 5,
+//   isEmpty: false,
+// }
+```
+
+`jsonBytes`, `ratio`, `savingsBytes`, and `savingsPercent` are available when CompreSJON compressed the value itself or when the value was restored from a CompreSJON JSON envelope. Raw buffers do not carry that metadata.
+
 ## Process And Recompress
 
 `process()` is the safest cache lifecycle for most workers: it destructively inflates, lets you mutate the live value, then recompresses it.
